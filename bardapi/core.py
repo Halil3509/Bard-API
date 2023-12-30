@@ -155,6 +155,7 @@ class Bard:
             raise Exception(
                 f"Response status code is not 200. Response Status is {resp.status_code}"
             )
+
         snim0e = re.search(r"SNlM0e\":\"(.*?)\"", resp.text)
         if not snim0e:
             raise Exception(
@@ -254,6 +255,46 @@ class Bard:
         cookie_headers = response.headers.get("Set-Cookie", "")
         parsed_cookies = self.parse_cookies(cookie_headers)
         return parsed_cookies
+
+
+    def update_1PSIDTS_DCC(self):
+        # Prepare request data
+        self._set_cookie_refresh_data()
+        data = [self.og_pid, f"{self.init_value}"]
+        data = json.dumps(data)
+        update_cookies_url = f"https://accounts.google.com/RotateCookiesPage?og_pid={self.og_pid}&rot={self.rot}&origin=https%3A%2F%2Fbard.google.com&exp_id={self.exp_id}"
+
+        # Update 1PSIDTS using the extracted og_pid and initValue
+        update_1psidts_url = "https://accounts.google.com/RotateCookies"
+        headers_rotate = {
+            "Host": "accounts.google.com",
+            "Content-Type": "application/json",
+            "Referer": update_cookies_url,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+        }
+        # headers_rotate.update(self.headers)
+
+        response = self.session.post(
+            update_1psidts_url,
+            data=data,
+            headers=headers_rotate,
+            timeout=self.timeout,
+            proxies=self.proxies,
+        )
+        # response.raise_for_status()
+
+        # Extract updated 1PSIDTS from the response headers
+        cookie_headers = response.headers.get("Set-Cookie", "")
+
+        # Extract __Secure-1PSIDTS value
+        secure_1psidts_match = re.search(r'__Secure-1PSIDTS=([^;]+)', cookie_headers)
+        secure_1psidts_value = secure_1psidts_match.group(1) if secure_1psidts_match else None
+
+        # Extract __Secure-1PSIDCC value
+        secure_1psidcc_match = re.search(r'__Secure-1PSIDCC=([^;]+)', cookie_headers)
+        secure_1psidcc_value = secure_1psidcc_match.group(1) if secure_1psidcc_match else None
+
+        return secure_1psidts_value, secure_1psidcc_value
 
     def parse_cookies(self, cookie_headers):
         cookie_dict = {}
@@ -439,6 +480,18 @@ class Bard:
             proxies=self.proxies,
         )
 
+        # updating process
+        secure_1psidts_value, secure_1psidcc_value = self.update_1PSIDTS_DCC()
+
+        # Create session again
+        session = requests.Session()
+        session.headers = SESSION_HEADERS
+        session.cookies.set("__Secure-1PSID", self.token)
+        session.cookies.set("__Secure-1PSIDTS", secure_1psidts_value)
+        session.cookies.set("__Secure-1PSIDCC", secure_1psidcc_value)
+
+        self.session = self._get_session(session)
+        print("Session was updated")
         # Post-processing of response
         resp_dict = json.loads(resp.content.splitlines()[-5])[0][2]
 

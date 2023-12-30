@@ -82,7 +82,7 @@ def extract_bard_cookie(cookies: bool = False) -> dict:
         Exception: If no supported browser is found or if there's an issue with cookie extraction.
     """
     import browser_cookie3
-
+    index = -1
     supported_browsers = [
         browser_cookie3.chrome,
         browser_cookie3.chromium,
@@ -99,6 +99,7 @@ def extract_bard_cookie(cookies: bool = False) -> dict:
     cookie_dict = {}
 
     for browser_fn in supported_browsers:
+        index += 1
         try:
             cj = browser_fn(domain_name=".google.com")
 
