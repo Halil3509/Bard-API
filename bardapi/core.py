@@ -9,6 +9,9 @@ from urllib.parse import parse_qs, urlparse
 import uuid
 import requests
 
+import threading
+import time
+
 # Third-party imports
 from typing import Optional
 
@@ -26,6 +29,7 @@ from bardapi.constants import (
     SESSION_HEADERS,
     TEXT_GENERATION_WEB_SERVER_PARAM,
     Tool,
+    CHAT_HISTORY
 )
 from bardapi.models.result import BardResult
 from bardapi.utils import (
@@ -54,6 +58,7 @@ class Bard:
         language: Optional[str] = None,
         run_code: bool = False,
         token_from_browser: bool = False,
+        pretraining: bool = False
     ):
         """
         Initialize the Bard instance.
@@ -86,8 +91,39 @@ class Bard:
         self.exp_id = ""
         self.init_value = ""
 
+        # For threading
+        self.token_lock = threading.Lock()
+        self.running = True
+        self.background_thread = threading.Thread(target=self.automatic_reloading_thread)
+        self.background_thread.start()
+
+        # Run pretraining
+        self.pretrain() if pretraining else False
+
         if google_translator_api_key:
             assert translate
+
+    def automatic_reloading_thread(self):
+        while self.running:
+
+            time.sleep(600)
+            with self.token_lock:
+                self._update_session()
+
+    def stop_automatic_reloading_thread(self):
+        self.running = False
+        self.background_thread.join()
+
+    def pretrain(self):
+
+        # Null check
+        if len(CHAT_HISTORY) == 0:
+            raise ValueError("There is not any value in CHAT_HISTORY constant variable.")
+
+        for text_dict in CHAT_HISTORY:
+            self.get_answer(input_text=text_dict['content'])
+
+        print("I was pretrained :)")
 
     def _get_token(self, token: str, token_from_browser: bool) -> str:
         """
@@ -149,8 +185,9 @@ class Bard:
                 "__Secure-1PSID value must end with a single dot. Enter correct __Secure-1PSID value."
             )
         resp = self.session.get(
-            "https://bard.google.com/", timeout=self.timeout, proxies=self.proxies
+            "https://bard.google.com/", timeout=self.timeout, proxies=self.proxies, verify=False
         )
+
         if resp.status_code != 200:
             raise Exception(
                 f"Response status code is not 200. Response Status is {resp.status_code}"
@@ -225,36 +262,36 @@ class Bard:
             if matches_init_value:
                 self.init_value = matches_init_value[0]
 
-    def update_1PSIDTS(self):
-        # Prepare request data
-        self._set_cookie_refresh_data()
-        data = [self.og_pid, f"{self.init_value}"]
-        data = json.dumps(data)
-        update_cookies_url = f"https://accounts.google.com/RotateCookiesPage?og_pid={self.og_pid}&rot={self.rot}&origin=https%3A%2F%2Fbard.google.com&exp_id={self.exp_id}"
-
-        # Update 1PSIDTS using the extracted og_pid and initValue
-        update_1psidts_url = "https://accounts.google.com/RotateCookies"
-        headers_rotate = {
-            "Host": "accounts.google.com",
-            "Content-Type": "application/json",
-            "Referer": update_cookies_url,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-        }
-        # headers_rotate.update(self.headers)
-
-        response = self.session.post(
-            update_1psidts_url,
-            data=data,
-            headers=headers_rotate,
-            timeout=self.timeout,
-            proxies=self.proxies,
-        )
-        response.raise_for_status()
-
-        # Extract updated 1PSIDTS from the response headers
-        cookie_headers = response.headers.get("Set-Cookie", "")
-        parsed_cookies = self.parse_cookies(cookie_headers)
-        return parsed_cookies
+    # def update_1PSIDTS(self):
+    #     # Prepare request data
+    #     self._set_cookie_refresh_data()
+    #     data = [self.og_pid, f"{self.init_value}"]
+    #     data = json.dumps(data)
+    #     update_cookies_url = f"https://accounts.google.com/RotateCookiesPage?og_pid={self.og_pid}&rot={self.rot}&origin=https%3A%2F%2Fbard.google.com&exp_id={self.exp_id}"
+    #
+    #     # Update 1PSIDTS using the extracted og_pid and initValue
+    #     update_1psidts_url = "https://accounts.google.com/RotateCookies"
+    #     headers_rotate = {
+    #         "Host": "accounts.google.com",
+    #         "Content-Type": "application/json",
+    #         "Referer": update_cookies_url,
+    #         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+    #     }
+    #     # headers_rotate.update(self.headers)
+    #
+    #     response = self.session.post(
+    #         update_1psidts_url,
+    #         data=data,
+    #         headers=headers_rotate,
+    #         timeout=self.timeout,
+    #         proxies=self.proxies,
+    #     )
+    #     response.raise_for_status()
+    #
+    #     # Extract updated 1PSIDTS from the response headers
+    #     cookie_headers = response.headers.get("Set-Cookie", "")
+    #     parsed_cookies = self.parse_cookies(cookie_headers)
+    #     return parsed_cookies
 
 
     def update_1PSIDTS_DCC(self):
@@ -280,6 +317,7 @@ class Bard:
             headers=headers_rotate,
             timeout=self.timeout,
             proxies=self.proxies,
+            verify=False
         )
         # response.raise_for_status()
 
@@ -295,6 +333,7 @@ class Bard:
         secure_1psidcc_value = secure_1psidcc_match.group(1) if secure_1psidcc_match else None
 
         return secure_1psidts_value, secure_1psidcc_value
+
 
     def parse_cookies(self, cookie_headers):
         cookie_dict = {}
@@ -379,6 +418,20 @@ class Bard:
         self._reqid += 100000
 
         return res
+
+    def _update_session(self):
+        # updating process
+        secure_1psidts_value, secure_1psidcc_value = self.update_1PSIDTS_DCC()
+
+        # Create session again
+        session = requests.Session()
+        session.headers = SESSION_HEADERS
+        session.cookies.set("__Secure-1PSID", self.token)
+        session.cookies.set("__Secure-1PSIDTS", secure_1psidts_value)
+        session.cookies.set("__Secure-1PSIDCC", secure_1psidcc_value)
+
+        self.session = self._get_session(session)
+        print("Session was updated")
 
     def get_answer(
         self,
@@ -480,18 +533,11 @@ class Bard:
             proxies=self.proxies,
         )
 
-        # updating process
-        secure_1psidts_value, secure_1psidcc_value = self.update_1PSIDTS_DCC()
+        # Reloading mechanism
+        with self.token_lock:
+            self._update_session()
 
-        # Create session again
-        session = requests.Session()
-        session.headers = SESSION_HEADERS
-        session.cookies.set("__Secure-1PSID", self.token)
-        session.cookies.set("__Secure-1PSIDTS", secure_1psidts_value)
-        session.cookies.set("__Secure-1PSIDCC", secure_1psidcc_value)
 
-        self.session = self._get_session(session)
-        print("Session was updated")
         # Post-processing of response
         resp_dict = json.loads(resp.content.splitlines()[-5])[0][2]
 
